@@ -36,14 +36,6 @@
 #define SPI_DEVICE         "/dev/spidev0.0"
 #define SPI_SPEED          1000000
 
-// 센서 데이터 구조체
-typedef struct {
-    float temperature;
-    float humidity;
-    struct tm timestamp;
-    int data_valid;
-} sensor_data_t;
-
 // 함수 선언
 int gpio_init(void);
 void gpio_cleanup(void);
