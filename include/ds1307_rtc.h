@@ -36,9 +36,9 @@ int ds1307_start_clock(void);
 int ds1307_stop_clock(void);
 
 // 내부 I2C 통신 함수
-static int ds1307_read_register(unsigned char reg);
-static int ds1307_write_register(unsigned char reg, unsigned char data);
-static int ds1307_read_burst(unsigned char *data, int len);
-static int ds1307_write_burst(const unsigned char *data, int len);
+//int ds1307_read_register(unsigned char reg);
+//int ds1307_write_register(unsigned char reg, unsigned char data);
+//int ds1307_read_burst(unsigned char *data, int len);
+//int ds1307_write_burst(const unsigned char *data, int len);
 
 #endif // DS1307_RTC_H

@@ -24,8 +24,8 @@ int dht11_is_ready_to_read(void);
 void dht11_print_data(const dht11_data_t *data);
 
 // 내부 함수 (1-Wire 통신)
-static int dht11_wait_for_state(int pin, int state, int timeout_us);
-static int dht11_read_bit(int pin);
-static int dht11_validate_checksum(unsigned char data[5]);
+int dht11_wait_for_state(int pin, int state, int timeout_us);
+int dht11_read_bit(int pin);
+int dht11_validate_checksum(unsigned char data[5]);
 
 #endif // DHT11_SENSOR_H
