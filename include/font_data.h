@@ -150,4 +150,3 @@ static inline void flip_font_horizontal(const u8 *src, u8 *dst) {
 }
 
 #endif // FONT_DATA_H
-

@@ -47,7 +47,7 @@ int ssd1306_init_display(struct i2c_client *client)
 
     int ret, i;
     printk(KERN_INFO "smart_env: SSD1306 초기화 시작...\n");
-    
+
     for (i = 0; i < sizeof(init_commands); i += 2) {
         ret = i2c_master_send(client, &init_commands[i], 2);
         if (ret < 0) {
@@ -56,7 +56,7 @@ int ssd1306_init_display(struct i2c_client *client)
         }
         msleep(1);
     }
-    
+
     printk(KERN_INFO "smart_env: SSD1306 초기화 완료!\n");
     return 0;
 }
@@ -144,7 +144,7 @@ int ssd1306_render_text(struct i2c_client *client, const char *text, int page)
     u8 rotated_char[8];  // 회전된 문자 버퍼
     int i, ret;
     int text_len = strlen(text);
-    
+
     if (page < 0 || page > 7) {
         printk(KERN_ERR "smart_env: 잘못된 페이지 번호: %d (0-7 범위)\n", page);
         return -EINVAL;
@@ -178,16 +178,16 @@ int ssd1306_render_text(struct i2c_client *client, const char *text, int page)
     // 문자별 렌더링 (최대 16문자, 8픽셀씩)
     for (i = 0; i < 16 && i < text_len; i++) {
         char c = text[i];
-        
+
         // 지원하지 않는 문자는 '?'로 표시
         if (c < 32 || c > 127) {
             printk(KERN_WARNING "smart_env: 지원하지 않는 문자 '%c' -> '?'\n", c);
             c = '?';
         }
-        
+
         // 🔧 핵심: 반시계방향 90도 회전으로 오른쪽 회전 보정!
         rotate_font_90_ccw(font8x8_basic[c - 32], rotated_char);
-        
+
         // 회전된 폰트 데이터 복사 (8바이트씩)
         memcpy(&data[1 + i * 8], rotated_char, 8);
     }
@@ -195,12 +195,12 @@ int ssd1306_render_text(struct i2c_client *client, const char *text, int page)
     // 데이터 전송
     ret = i2c_master_send(client, data, 1 + (i * 8));
     if (ret >= 0) {
-        printk(KERN_INFO "smart_env: 회전 보정 텍스트 렌더링 완료: '%s' (페이지 %d, %d문자)\n", 
+        printk(KERN_INFO "smart_env: 회전 보정 텍스트 렌더링 완료: '%s' (페이지 %d, %d문자)\n",
                text, page, i);
     } else {
         printk(KERN_ERR "smart_env: 텍스트 렌더링 실패: %d\n", ret);
     }
-    
+
     return ret;
 }
 
@@ -208,9 +208,9 @@ int ssd1306_render_text(struct i2c_client *client, const char *text, int page)
 int ssd1306_set_cursor(struct i2c_client *client, int col, int page)
 {
     int ret;
-    
+
     if (col < 0 || col > 127 || page < 0 || page > 7) {
-	    printk(KERN_ERR "smart_env: 잘못된 커서 위치: col=%d, page=%d\n", col, page);
+            printk(KERN_ERR "smart_env: 잘못된 커서 위치: col=%d, page=%d\n", col, page);
        return -EINVAL;
    }
 
