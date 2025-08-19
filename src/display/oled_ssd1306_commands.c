@@ -2,6 +2,7 @@
 #include <linux/i2c.h>
 #include <linux/delay.h>
 #include <linux/string.h>
+#include <linux/errno.h>
 #include "../include/font_data.h"
 
 // SSD1306 명령어 정의
@@ -12,9 +13,10 @@
 #define SSD1306_SETSTARTLINE        0x40
 #define SSD1306_CHARGEPUMP          0x8D
 #define SSD1306_MEMORYMODE          0x20
-#define SSD1306_SEGREMAP            0xA1
-#define SSD1306_COMSCANDEC          0xC8
-#define SSD1306_COMSCANINC          0xC0
+#define SSD1306_SEGREMAP_NORMAL     0xA0 // 수정: 표준 모드
+#define SSD1306_SEGREMAP_REVERSE    0xA1
+#define SSD1306_COMSCAN_NORMAL      0xC8 // 수정: 표준 모드
+#define SSD1306_COMSCAN_REVERSE     0xC0
 #define SSD1306_SETCOMPINS          0xDA
 #define SSD1306_SETCONTRAST         0x81
 #define SSD1306_SETPRECHARGE        0xD9
@@ -22,333 +24,209 @@
 #define SSD1306_DISPLAYALLON_RESUME 0xA4
 #define SSD1306_NORMALDISPLAY       0xA6
 #define SSD1306_DISPLAYON           0xAF
+#define SSD1306_SET_COLUMN_ADDR     0x21
+#define SSD1306_SET_PAGE_ADDR       0x22
 
-// OLED 초기화
+/**
+ * ssd1306_init_display - OLED 디스플레이를 초기화합니다.
+ * @client: I2C 클라이언트 포인터
+ *
+ * 하드웨어 플립/반전 기능 없이 가장 표준적인 모드로 OLED를 설정합니다.
+ */
 int ssd1306_init_display(struct i2c_client *client)
 {
-    u8 init_commands[] = {
+    // 명령어와 데이터를 한 번에 보내기 위해 재구성
+    static const u8 init_sequence[] = {
         0x00, SSD1306_DISPLAYOFF,
-        0x00, SSD1306_SETDISPLAYCLOCKDIV, 0x00, 0x80,
-        0x00, SSD1306_SETMULTIPLEX, 0x00, 0x3F,
-        0x00, SSD1306_SETDISPLAYOFFSET, 0x00, 0x00,
-        0x00, SSD1306_SETSTARTLINE | 0x00,
-        0x00, SSD1306_CHARGEPUMP, 0x00, 0x14,
-        0x00, SSD1306_MEMORYMODE, 0x00, 0x00,        // 수평 주소 모드
-        0x00, SSD1306_SEGREMAP | 0x00,               // 정상 세그먼트 방향
-        0x00, SSD1306_COMSCANINC,                    // 정상 COM 스캔 방향
-        0x00, SSD1306_SETCOMPINS, 0x00, 0x12,
-        0x00, SSD1306_SETCONTRAST, 0x00, 0xCF,
-        0x00, SSD1306_SETPRECHARGE, 0x00, 0xF1,
-        0x00, SSD1306_SETVCOMDETECT, 0x00, 0x40,
+        0x00, SSD1306_SETDISPLAYCLOCKDIV, 0x80,
+        0x00, SSD1306_SETMULTIPLEX, 0x3F,
+        0x00, SSD1306_SETDISPLAYOFFSET, 0x00,
+        0x00, SSD1306_SETSTARTLINE,
+        0x00, SSD1306_CHARGEPUMP, 0x14,
+        0x00, SSD1306_MEMORYMODE, 0x00, // 0x00 = Horizontal Addressing Mode
+        0x00, SSD1306_SEGREMAP_REVERSE,  // 좌우 반전 없음
+        0x00, SSD1306_COMSCAN_NORMAL,   // 상하 반전 없음
+        0x00, SSD1306_SETCOMPINS, 0x12,
+        0x00, SSD1306_SETCONTRAST, 0xCF,
+        0x00, SSD1306_SETPRECHARGE, 0xF1,
+        0x00, SSD1306_SETVCOMDETECT, 0x40,
         0x00, SSD1306_DISPLAYALLON_RESUME,
         0x00, SSD1306_NORMALDISPLAY,
         0x00, SSD1306_DISPLAYON
     };
+    int ret;
 
-    int ret, i;
-    printk(KERN_INFO "smart_env: SSD1306 초기화 시작...\n");
-
-    for (i = 0; i < sizeof(init_commands); i += 2) {
-        ret = i2c_master_send(client, &init_commands[i], 2);
-        if (ret < 0) {
-            printk(KERN_ERR "smart_env: 초기화 실패 (index: %d, ret: %d)\n", i, ret);
-            return ret;
-        }
-        msleep(1);
+    pr_info("smart_env: SSD1306 초기화 시작...\n");
+    ret = i2c_master_send(client, init_sequence, sizeof(init_sequence));
+    if (ret < 0) {
+        pr_err("smart_env: 초기화 실패 (ret: %d)\n", ret);
+        return ret;
     }
 
-    printk(KERN_INFO "smart_env: SSD1306 초기화 완료!\n");
+    pr_info("smart_env: SSD1306 초기화 완료!\n");
     return 0;
 }
 
-// 화면 지우기
+/**
+ * ssd1306_clear_display - 화면 전체를 0으로 채워 지웁니다.
+ */
 int ssd1306_clear_display(struct i2c_client *client)
 {
-    u8 clear_commands[] = {
-        0x00, 0x21, 0x00, 0x00, 0x00, 0x7F,  // 열 주소 설정 (0-127)
-        0x00, 0x22, 0x00, 0x00, 0x00, 0x07   // 페이지 주소 설정 (0-7)
-    };
+    u8 page_buffer[129];
+    int ret, page;
 
-    u8 data_buffer[129];
-    int ret, i, page;
+    // 데이터 버퍼의 첫 바이트는 데이터 전송을 의미하는 0x40
+    page_buffer[0] = 0x40;
+    memset(&page_buffer[1], 0x00, 128);
 
-    // 주소 설정 명령어 전송
-    for (i = 0; i < sizeof(clear_commands); i += 2) {
-        ret = i2c_master_send(client, &clear_commands[i], 2);
-        if (ret < 0) {
-            printk(KERN_ERR "smart_env: 클리어 명령어 전송 실패\n");
-            return ret;
-        }
-    }
-
-    // 데이터 버퍼 준비
-    data_buffer[0] = 0x40; // 데이터 모드
-    memset(&data_buffer[1], 0x00, 128);
-
-    // 8개 페이지에 대해 데이터 전송
     for (page = 0; page < 8; page++) {
-        ret = i2c_master_send(client, data_buffer, 129);
+        u8 set_page_cmd[] = {0x00, 0xB0 | page};
+        i2c_master_send(client, set_page_cmd, sizeof(set_page_cmd));
+        ret = i2c_master_send(client, page_buffer, sizeof(page_buffer));
         if (ret < 0) {
-            printk(KERN_ERR "smart_env: 페이지 %d 클리어 실패\n", page);
+            pr_err("smart_env: 페이지 %d 클리어 실패\n", page);
             return ret;
         }
     }
 
-    printk(KERN_INFO "smart_env: OLED 화면 지우기 완료\n");
+    pr_info("smart_env: OLED 화면 지우기 완료\n");
     return 0;
 }
 
-// 디스플레이 켜기
+/**
+ * ssd1306_display_on - 디스플레이를 켭니다.
+ */
 int ssd1306_display_on(struct i2c_client *client)
 {
     u8 cmd[] = {0x00, SSD1306_DISPLAYON};
-    int ret = i2c_master_send(client, cmd, 2);
-    if (ret >= 0) {
-        printk(KERN_INFO "smart_env: 디스플레이 켜짐\n");
-    } else {
-        printk(KERN_ERR "smart_env: 디스플레이 켜기 실패\n");
-    }
-    return ret;
+    return i2c_master_send(client, cmd, sizeof(cmd));
 }
 
-// 디스플레이 끄기
+/**
+ * ssd1306_display_off - 디스플레이를 끕니다.
+ */
 int ssd1306_display_off(struct i2c_client *client)
 {
     u8 cmd[] = {0x00, SSD1306_DISPLAYOFF};
-    int ret = i2c_master_send(client, cmd, 2);
-    if (ret >= 0) {
-        printk(KERN_INFO "smart_env: 디스플레이 꺼짐\n");
-    } else {
-        printk(KERN_ERR "smart_env: 디스플레이 끄기 실패\n");
-    }
-    return ret;
+    return i2c_master_send(client, cmd, sizeof(cmd));
 }
 
-// 대비 설정
+/**
+ * ssd1306_set_contrast - 명암을 조절합니다.
+ */
 int ssd1306_set_contrast(struct i2c_client *client, u8 contrast)
 {
-    u8 cmd[] = {0x00, SSD1306_SETCONTRAST, 0x00, contrast};
-    int ret = i2c_master_send(client, cmd, 4);
-    if (ret >= 0) {
-        printk(KERN_INFO "smart_env: 대비 설정: %d\n", contrast);
-    } else {
-        printk(KERN_ERR "smart_env: 대비 설정 실패\n");
-    }
-    return ret;
+    u8 cmd[] = {0x00, SSD1306_SETCONTRAST, contrast};
+    return i2c_master_send(client, cmd, sizeof(cmd));
 }
 
-// 텍스트 렌더링 함수 (90도 회전 보정 적용)
-int ssd1306_render_text(struct i2c_client *client, const char *text, int page)
+/**
+ * ssd1306_render_text - 지정된 페이지(줄)에 텍스트를 수평으로 출력합니다.
+ * @client: I2C 클라이언트 포인터
+ * @text: 출력할 문자열
+ * @page: 출력할 페이지 (0~7)
+ *
+ * 폰트 회전 없이 가로로 텍스트를 그리는 표준 방식입니다.
+ */
+
+int ssd1306_render_text(struct i2c_client *client,
+                        const char *text,
+                        int page)
 {
-    u8 data[129];
-    u8 rotated_char[8];  // 회전된 문자 버퍼
-    int i, ret;
+    int i, j, ret;
     int text_len = strlen(text);
+    u8 page_buffer[129];
+    u8 set_pos_cmds[5];
+    
+    // --- 추가: 좌우 반전된 폰트를 임시 저장할 버퍼 ---
+    u8 flipped_char_buffer[8];
 
     if (page < 0 || page > 7) {
-        printk(KERN_ERR "smart_env: 잘못된 페이지 번호: %d (0-7 범위)\n", page);
+        pr_err("smart_env: 잘못된 페이지 번호: %d\n", page);
         return -EINVAL;
     }
 
-    if (text_len == 0) {
-        printk(KERN_INFO "smart_env: 빈 텍스트, 렌더링 생략\n");
-        return 0;
-    }
+    page_buffer[0] = 0x40;
+    memset(&page_buffer[1], 0x00, 128);
 
-    // 페이지 주소 설정
-    u8 set_page[] = {0x00, 0xB0 | (page & 0x07)};
-    ret = i2c_master_send(client, set_page, sizeof(set_page));
-    if (ret < 0) {
-        printk(KERN_ERR "smart_env: 페이지 설정 실패\n");
-        return ret;
-    }
-
-    // 열 주소 설정 (시작 위치)
-    u8 set_col[] = {0x00, 0x00, 0x00, 0x10}; // Lower/Higher Column Start Address
-    ret = i2c_master_send(client, set_col, sizeof(set_col));
-    if (ret < 0) {
-        printk(KERN_ERR "smart_env: 열 주소 설정 실패\n");
-        return ret;
-    }
-
-    // 텍스트 데이터 준비
-    data[0] = 0x40; // 데이터 모드
-    memset(&data[1], 0x00, 128); // 전체 라인 클리어
-
-    // 문자별 렌더링 (최대 16문자, 8픽셀씩)
-    for (i = 0; i < 16 && i < text_len; i++) {
+    for (i = 0; i < text_len; i++) {
         char c = text[i];
+        if (c < 32 || c > 127) c = '?';
 
-        // 지원하지 않는 문자는 '?'로 표시
-        if (c < 32 || c > 127) {
-            printk(KERN_WARNING "smart_env: 지원하지 않는 문자 '%c' -> '?'\n", c);
-            c = '?';
+        int x_pos = i * 6;
+        if (x_pos + 6 > 128) break;
+
+        const u8 *original_font_char = font6x8_basic[c - 32];
+        
+        // --- 추가: 폰트 데이터를 먼저 좌우 반전시킵니다 ---
+        flip_font_6x8_horizontal(original_font_char, flipped_char_buffer);
+
+        // 폰트의 8개 행(row) 데이터를 6개 열(column)에 맞게 재구성
+        for (j = 0; j < 6; j++) {
+            u8 col_data = 0;
+            // --- 수정: 반전된 폰트(flipped_char_buffer)를 사용합니다 ---
+            if ((flipped_char_buffer[0] >> j) & 1) col_data |= (1 << 0);
+            if ((flipped_char_buffer[1] >> j) & 1) col_data |= (1 << 1);
+            if ((flipped_char_buffer[2] >> j) & 1) col_data |= (1 << 2);
+            if ((flipped_char_buffer[3] >> j) & 1) col_data |= (1 << 3);
+            if ((flipped_char_buffer[4] >> j) & 1) col_data |= (1 << 4);
+            if ((flipped_char_buffer[5] >> j) & 1) col_data |= (1 << 5);
+            if ((flipped_char_buffer[6] >> j) & 1) col_data |= (1 << 6);
+            if ((flipped_char_buffer[7] >> j) & 1) col_data |= (1 << 7);
+            page_buffer[1 + x_pos + j] = col_data;
         }
-
-        // 🔧 핵심: 반시계방향 90도 회전으로 오른쪽 회전 보정!
-        rotate_font_90_ccw(font8x8_basic[c - 32], rotated_char);
-
-        // 회전된 폰트 데이터 복사 (8바이트씩)
-        memcpy(&data[1 + i * 8], rotated_char, 8);
     }
 
-    // 데이터 전송
-    ret = i2c_master_send(client, data, 1 + (i * 8));
-    if (ret >= 0) {
-        printk(KERN_INFO "smart_env: 회전 보정 텍스트 렌더링 완료: '%s' (페이지 %d, %d문자)\n",
-               text, page, i);
-    } else {
-        printk(KERN_ERR "smart_env: 텍스트 렌더링 실패: %d\n", ret);
-    }
+    // OLED 커서 이동 및 데이터 전송 로직 (이하 동일)
+    set_pos_cmds[0] = 0x00;
+    set_pos_cmds[1] = 0xB0 | page;
+    set_pos_cmds[2] = 0x00;
+    set_pos_cmds[3] = 0x10;
+
+    ret = i2c_master_send(client, set_pos_cmds, 4);
+    if (ret < 0) return ret;
+
+    ret = i2c_master_send(client, page_buffer, sizeof(page_buffer));
 
     return ret;
 }
 
-// 커서 위치 설정 함수 (추가 기능)
-int ssd1306_set_cursor(struct i2c_client *client, int col, int page)
+/**
+ * ssd1306_render_auto_wrapped - 화면에 텍스트를 자동 줄바꿈하여 출력합니다.
+ */
+int ssd1306_render_auto_wrapped(struct i2c_client *client,
+                                const char *text)
 {
-    int ret;
+    const int max_cols  = 21; // 128 / 6 = 21.33...
+    const int max_lines = 8;
+    char linebuf[max_cols + 1];
+    int text_len = strlen(text);
+    int idx = 0, line = 0, ret;
 
-    if (col < 0 || col > 127 || page < 0 || page > 7) {
-            printk(KERN_ERR "smart_env: 잘못된 커서 위치: col=%d, page=%d\n", col, page);
-       return -EINVAL;
-   }
+    if (!text || text_len == 0) return -EINVAL;
 
-   // 페이지 설정
-   u8 set_page[] = {0x00, 0xB0 | (page & 0x07)};
-   ret = i2c_master_send(client, set_page, sizeof(set_page));
-   if (ret < 0) {
-       printk(KERN_ERR "smart_env: 페이지 설정 실패\n");
-       return ret;
-   }
+    ret = ssd1306_clear_display(client);
+    if (ret < 0) return ret;
 
-   // 열 위치 설정
-   u8 set_col_low[] = {0x00, 0x00 | (col & 0x0F)};        // Lower 4 bits
-   u8 set_col_high[] = {0x00, 0x10 | ((col >> 4) & 0x0F)}; // Higher 4 bits
+    while (idx < text_len && line < max_lines) {
+        int copy_len = 0;
 
-   ret = i2c_master_send(client, set_col_low, sizeof(set_col_low));
-   if (ret < 0) return ret;
+        while (copy_len < max_cols &&
+               idx + copy_len < text_len &&
+               text[idx + copy_len] != '\n') {
+            copy_len++;
+        }
 
-   ret = i2c_master_send(client, set_col_high, sizeof(set_col_high));
-   if (ret < 0) return ret;
+        memcpy(linebuf, &text[idx], copy_len);
+        linebuf[copy_len] = '\0';
 
-   printk(KERN_INFO "smart_env: 커서 위치 설정: (%d, %d)\n", col, page);
-   return 0;
-}
+        ret = ssd1306_render_text(client, linebuf, line);
+        if (ret < 0) return ret;
 
-// 특정 위치에 텍스트 출력 함수
-int ssd1306_print_at(struct i2c_client *client, const char *text, int col, int page)
-{
-   int ret;
+        idx += copy_len;
+        if (idx < text_len && text[idx] == '\n') idx++;
+        line++;
+    }
 
-   // 커서 위치 설정
-   ret = ssd1306_set_cursor(client, col, page);
-   if (ret < 0) return ret;
-
-   // 텍스트 렌더링
-   return ssd1306_render_text(client, text, page);
-}
-
-// 전체 화면에 여러 줄 텍스트 출력 함수
-int ssd1306_print_multiline(struct i2c_client *client, const char *lines[], int num_lines)
-{
-   int i, ret;
-
-   if (num_lines > 8) {
-       printk(KERN_WARNING "smart_env: 최대 8줄까지만 지원 (요청: %d줄)\n", num_lines);
-       num_lines = 8;
-   }
-
-   for (i = 0; i < num_lines; i++) {
-       if (lines[i] != NULL) {
-           ret = ssd1306_render_text(client, lines[i], i);
-           if (ret < 0) {
-               printk(KERN_ERR "smart_env: %d번째 줄 렌더링 실패\n", i);
-               return ret;
-           }
-       }
-   }
-
-   printk(KERN_INFO "smart_env: %d줄 멀티라인 텍스트 출력 완료\n", num_lines);
-   return 0;
-}
-
-// 간단한 그래픽 함수: 수평선 그리기
-int ssd1306_draw_hline(struct i2c_client *client, int x, int y, int width)
-{
-   u8 data[129];
-   int page = y / 8;
-   int bit_pos = y % 8;
-   int i, ret;
-
-   if (page > 7 || x < 0 || x + width > 128) {
-       printk(KERN_ERR "smart_env: 잘못된 라인 파라미터\n");
-       return -EINVAL;
-   }
-
-   // 커서 위치 설정
-   ret = ssd1306_set_cursor(client, x, page);
-   if (ret < 0) return ret;
-
-   // 라인 데이터 준비
-   data[0] = 0x40; // 데이터 모드
-   for (i = 1; i <= width; i++) {
-       data[i] = (1 << bit_pos);
-   }
-
-   ret = i2c_master_send(client, data, width + 1);
-   if (ret >= 0) {
-       printk(KERN_INFO "smart_env: 수평선 그리기 완료: (%d,%d) 길이=%d\n", x, y, width);
-   }
-
-   return ret;
-}
-
-// 프레임 테스트 함수 (디버그용)
-int ssd1306_test_pattern(struct i2c_client *client)
-{
-   const char *test_lines[] = {
-       "Line 0: TEST",
-       "Line 1: HELLO",
-       "Line 2: WORLD",
-       "Line 3: 12345",
-       "Line 4: ABCDE",
-       "Line 5: !@#$%",
-       "Line 6: .:;?",
-       "Line 7: END"
-   };
-
-   printk(KERN_INFO "smart_env: 테스트 패턴 출력 시작\n");
-
-   // 화면 지우기
-   int ret = ssd1306_clear_display(client);
-   if (ret < 0) return ret;
-
-   // 8줄 테스트 텍스트 출력
-   return ssd1306_print_multiline(client, test_lines, 8);
-}
-
-// 시스템 정보 출력 함수 (실제 사용 예시)
-int ssd1306_show_system_info(struct i2c_client *client,
-                            const char *temp, const char *humidity,
-                            const char *time, const char *status)
-{
-   const char *info_lines[] = {
-       "=== SYSTEM INFO ===",
-       temp ? temp : "Temp: N/A",
-       humidity ? humidity : "Humidity: N/A",
-       time ? time : "Time: N/A",
-       "",
-       status ? status : "Status: OK",
-       "",
-       "Press any key..."
-   };
-
-   printk(KERN_INFO "smart_env: 시스템 정보 화면 출력\n");
-
-   // 화면 지우기 후 정보 출력
-   int ret = ssd1306_clear_display(client);
-   if (ret < 0) return ret;
-
-   return ssd1306_print_multiline(client, info_lines, 8);
+    return 0;
 }

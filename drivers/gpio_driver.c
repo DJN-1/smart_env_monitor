@@ -43,7 +43,7 @@ void gpio_delay_us(int microseconds) {
     struct timespec start, now;
     clock_gettime(CLOCK_MONOTONIC, &start);
 
-    long target_ns = microseconds * 1000L;
+    long target_ns = microseconds * 950L;
     while(1){
 	    clock_gettime(CLOCK_MONOTONIC, &now);
 	    long elapsed_ns = (now.tv_sec - start.tv_sec) * 1000000000L +
