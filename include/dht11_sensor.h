@@ -6,7 +6,7 @@
 // DHT11 센서 설정
 #define DHT11_MAX_TIMINGS   85
 #define DHT11_READ_TIMEOUT  10000  // 10ms
-#define DHT11_MIN_INTERVAL  2000000 // 2초 (마이크로초)
+#define DHT11_MIN_INTERVAL  3000000 // 3초 (마이크로초)
 
 // DHT11 데이터 구조체
 typedef struct {
